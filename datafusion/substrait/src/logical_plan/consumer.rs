@@ -44,8 +44,8 @@ use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
-    VIEW_CONTAINER_TYPE_VARIATION_REF,
+    DICTIONARY_TYPE_VARIATION_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
+    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 #[allow(deprecated)]
 use crate::variation_const::{
@@ -2449,27 +2449,35 @@ fn from_substrait_type(
                 let key_type = map.key.as_ref().ok_or_else(|| {
                     substrait_datafusion_err!("Map type must have key type")
                 })?;
+                let key_datatype =
+                    from_substrait_type(consumer, key_type, dfs_names, name_idx)?;
                 let value_type = map.value.as_ref().ok_or_else(|| {
                     substrait_datafusion_err!("Map type must have value type")
                 })?;
-                let key_field = Arc::new(Field::new(
-                    "key",
-                    from_substrait_type(consumer, key_type, dfs_names, name_idx)?,
-                    false,
-                ));
-                let value_field = Arc::new(Field::new(
-                    "value",
-                    from_substrait_type(consumer, value_type, dfs_names, name_idx)?,
-                    true,
-                ));
-                Ok(DataType::Map(
-                    Arc::new(Field::new_struct(
-                        "entries",
-                        [key_field, value_field],
-                        false, // The inner map field is always non-nullable (Arrow #1697),
+                let value_datatype =
+                    from_substrait_type(consumer, value_type, dfs_names, name_idx)?;
+                match map.type_variation_reference {
+                    DEFAULT_CONTAINER_TYPE_VARIATION_REF => {
+                        let key_field = Arc::new(Field::new("key", key_datatype, false));
+                        let value_field =
+                            Arc::new(Field::new("value", value_datatype, true));
+                        Ok(DataType::Map(
+                            Arc::new(Field::new_struct(
+                                "entries",
+                                [key_field, value_field],
+                                false, // The inner map field is always non-nullable (Arrow #1697),
+                            )),
+                            false, // whether keys are sorted
+                        ))
+                    }
+                    DICTIONARY_TYPE_VARIATION_REF => Ok(DataType::Dictionary(
+                        Box::new(key_datatype),
+                        Box::new(value_datatype),
                     )),
-                    false, // whether keys are sorted
-                ))
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                    ),
+                }
             }
             r#type::Kind::Decimal(d) => match d.type_variation_reference {
                 DECIMAL_128_TYPE_VARIATION_REF => {
